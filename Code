@@ -1,5 +1,8 @@
 --[[
-    Drill to Earth Core - Aura + Item Pull + Stealth NPC + God Mode + Coin
+    Drill to Earth Core - v4
+    Fitur: Adaptive Aura, Item Pull, Freeze NPC, Invisible, God Mode,
+           Coin Adder, Auto-Sell, Auto-Prompt, Auto-Quest, Auto-Rejoin,
+           Noclip, ESP, Speed, Fly
     Catatan: Client-side only. Coin & God Mode works kalau game client-authoritative.
 --]]
 
@@ -9,6 +12,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
@@ -31,10 +35,8 @@ local State = {
     CollectRadius = 30,
     ItemTPHeight = 2,
     -- Stealth NPC
-    StealthNPC = false,
     FreezeNPC = false,
     Invisible = false,
-    AntiDetectRadius = 50,
     -- God Mode
     GodMode = false,
     -- Coin
@@ -46,6 +48,23 @@ local State = {
     SpeedValue = 50,
     Fly = false,
     FlySpeed = 60,
+}
+
+-- ============ AUTO-FARM STATE (terpisah) ============
+local AutoFarm = {
+    AutoSell = false,
+    SellInterval = 2,
+    AutoPrompt = false,
+    PromptRadius = 20,
+    PromptInterval = 0.3,
+    AutoQuest = false,
+    QuestInterval = 5,
+    AutoRejoin = false,
+    RejoinDelay = 5,
+    -- Internal
+    LastSell = 0,
+    LastQuest = 0,
+    LastPrompt = 0,
 }
 
 -- ============ HELPERS ============
@@ -279,7 +298,6 @@ local function auraKillLoop()
 end
 
 -- ============ 3. STEALTH NPC ============
--- Freeze semua NPC (set WalkSpeed 0 + disable AI script)
 local function freezeNPCLoop()
     if not State.FreezeNPC then return end
     for _, obj in ipairs(Workspace:GetDescendants()) do
@@ -293,7 +311,6 @@ local function freezeNPCLoop()
     end
 end
 
--- Invisible (character transparan)
 local function invisibleLoop()
     if not State.Invisible then return end
     local char = getChar()
@@ -305,19 +322,6 @@ local function invisibleLoop()
         end
         if part:IsA("Decal") then
             part.Transparency = 1
-        end
-    end
-end
-local function restoreVisible()
-    local char = getChar()
-    if not char then return end
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.LocalTransparencyModifier = 0
-            part.Transparency = 0
-        end
-        if part:IsA("Decal") then
-            part.Transparency = 0
         end
     end
 end
@@ -366,7 +370,6 @@ local function addCoin(amount)
     pcall(function()
         if remote:IsA("RemoteEvent") then
             remote:FireServer(amount)
-            -- Coba beberapa signature umum
             remote:FireServer("AddCoin", amount)
             remote:FireServer(amount, "coin")
         elseif remote:IsA("RemoteFunction") then
@@ -376,7 +379,161 @@ local function addCoin(amount)
     return true
 end
 
--- ============ 6. UTILITY ============
+-- ============ 6. AUTO-FARM SECTION ============
+local SellRemote = nil
+local QuestRemote = nil
+
+local function findSellRemote()
+    if SellRemote and SellRemote.Parent then return SellRemote end
+    SellRemote = nil
+    local candidates = {
+        "Sell", "Jual", "SellAll", "SellItem", "Shop", "Market",
+        "Trade", "TradeAll", "Submit", "Deposit", "CashOut", "Convert",
+        "Refine", "Smelt", "Process",
+    }
+    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+            local lower = obj.Name:lower()
+            for _, kw in ipairs(candidates) do
+                if lower:find(kw:lower()) then
+                    SellRemote = obj
+                    print("[AutoSell] Remote:", obj:GetFullName())
+                    return obj
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function findQuestRemote()
+    if QuestRemote and QuestRemote.Parent then return QuestRemote end
+    QuestRemote = nil
+    local candidates = {
+        "Quest", "Claim", "Reward", "Daily", "Bonus", "Task",
+        "Complete", "Finish", "TurnIn", "SubmitQuest",
+    }
+    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+            local lower = obj.Name:lower()
+            for _, kw in ipairs(candidates) do
+                if lower:find(kw:lower()) then
+                    QuestRemote = obj
+                    print("[AutoQuest] Remote:", obj:GetFullName())
+                    return obj
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function findSellButton()
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return nil end
+    local keywords = {"sell", "jual", "shop", "market", "trade", "submit"}
+    for _, gui in ipairs(playerGui:GetDescendants()) do
+        if gui:IsA("TextButton") or gui:IsA("ImageButton") then
+            local nameLower = gui.Name:lower()
+            local textLower = (gui.Text or ""):lower()
+            for _, kw in ipairs(keywords) do
+                if nameLower:find(kw) or textLower:find(kw) then
+                    return gui
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function autoSellLoop()
+    if not AutoFarm.AutoSell then return end
+    local now = tick()
+    if now - AutoFarm.LastSell < AutoFarm.SellInterval then return end
+    AutoFarm.LastSell = now
+
+    local remote = SellRemote or findSellRemote()
+    if remote then
+        pcall(function()
+            if remote:IsA("RemoteEvent") then
+                remote:FireServer()
+                remote:FireServer("all")
+                remote:FireServer("sell")
+            elseif remote:IsA("RemoteFunction") then
+                remote:InvokeServer()
+                remote:InvokeServer("all")
+            end
+        end)
+    end
+
+    local btn = findSellButton()
+    if btn then
+        pcall(function()
+            if getconnections then
+                for _, conn in ipairs(getconnections(btn.MouseButton1Click)) do
+                    if conn.Fire then pcall(conn.Fire, conn) end
+                end
+            end
+            pcall(function() btn.MouseButton1Click:Fire() end)
+        end)
+    end
+end
+
+local function autoPromptLoop()
+    if not AutoFarm.AutoPrompt then return end
+    local now = tick()
+    if now - AutoFarm.LastPrompt < AutoFarm.PromptInterval then return end
+    AutoFarm.LastPrompt = now
+    local hrp = getHRP()
+    if not hrp then return end
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Enabled then
+            local parent = obj.Parent
+            if parent and parent:IsA("BasePart") then
+                if (parent.Position - hrp.Position).Magnitude <= AutoFarm.PromptRadius then
+                    pcall(function() fireproximityprompt(obj) end)
+                end
+            end
+        end
+    end
+end
+
+local function autoQuestLoop()
+    if not AutoFarm.AutoQuest then return end
+    local now = tick()
+    if now - AutoFarm.LastQuest < AutoFarm.QuestInterval then return end
+    AutoFarm.LastQuest = now
+
+    local remote = QuestRemote or findQuestRemote()
+    if remote then
+        pcall(function()
+            if remote:IsA("RemoteEvent") then
+                remote:FireServer()
+                remote:FireServer("claim")
+                remote:FireServer("all")
+            elseif remote:IsA("RemoteFunction") then
+                remote:InvokeServer()
+                remote:InvokeServer("claim")
+            end
+        end)
+    end
+end
+
+-- Auto-Rejoin (hati-hati, jangan spam)
+task.spawn(function()
+    while task.wait(2) do
+        if AutoFarm.AutoRejoin then
+            pcall(function()
+                if not LocalPlayer.Parent then
+                    task.wait(AutoFarm.RejoinDelay)
+                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                end
+            end)
+        end
+    end
+end)
+
+-- ============ 7. UTILITY ============
 local function noclipLoop()
     if not State.Noclip then return end
     local char = getChar()
@@ -486,16 +643,23 @@ RunService.Heartbeat:Connect(function(dt)
         pcall(scanAndPull)
         pcall(auraKillLoop)
         pcall(freezeNPCLoop)
+        pcall(autoSellLoop)
+        pcall(autoPromptLoop)
     end
     pcall(noclipLoop)
     pcall(speedLoop)
     pcall(flyLoop)
     pcall(godModeLoop)
     pcall(invisibleLoop)
-end
+end)
 task.spawn(function()
     while task.wait(0.5) do
         pcall(espLoop)
+    end
+end)
+task.spawn(function()
+    while task.wait(1) do
+        pcall(autoQuestLoop)
     end
 end)
 
@@ -518,8 +682,8 @@ ToggleBtn.Parent = ScreenGui
 Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 10)
 
 local Frame = Instance.new("Frame")
-Frame.Size = UDim2.new(0, 320, 0, 560)
-Frame.Position = UDim2.new(0.5, -160, 0.5, -280)
+Frame.Size = UDim2.new(0, 320, 0, 600)
+Frame.Position = UDim2.new(0.5, -160, 0.5, -300)
 Frame.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
 Frame.BorderSizePixel = 0
 Frame.Visible = false
@@ -529,7 +693,7 @@ Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 12)
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 40)
 Title.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
-Title.Text = "🎯 Drill to Earth Core v3"
+Title.Text = "🎯 Drill to Earth Core v4"
 Title.TextColor3 = Color3.fromRGB(0, 0, 0)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 16
@@ -543,12 +707,14 @@ Scroll.Position = UDim2.new(0, 5, 0, 45)
 Scroll.BackgroundTransparency = 1
 Scroll.BorderSizePixel = 0
 Scroll.ScrollBarThickness = 4
-Scroll.CanvasSize = UDim2.new(0, 0, 0, 1200)
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 1500)
 Scroll.Parent = Frame
 
 local toggleCount = 0
-local function makeToggle(name, key)
+-- Support 2 table: State & AutoFarm
+local function makeToggle(name, key, useAutoFarm)
     toggleCount = toggleCount + 1
+    local target = useAutoFarm and AutoFarm or State
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, -10, 0, 32)
     btn.Position = UDim2.new(0, 5, 0, (toggleCount - 1) * 36)
@@ -561,8 +727,8 @@ local function makeToggle(name, key)
     btn.Parent = Scroll
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     btn.MouseButton1Click:Connect(function()
-        State[key] = not State[key]
-        if State[key] then
+        target[key] = not target[key]
+        if target[key] then
             btn.Text = name .. ": ON"
             btn.BackgroundColor3 = Color3.fromRGB(0, 150, 80)
         else
@@ -573,15 +739,21 @@ local function makeToggle(name, key)
     return btn
 end
 
+-- Toggle utama
 makeToggle("💀 Adaptive Aura", "AuraKill")
 makeToggle("🧲 Item Pull", "ItemCollector")
-makeToggle("🥶 Freeze NPC (Stealth)", "FreezeNPC")
+makeToggle("🥶 Freeze NPC", "FreezeNPC")
 makeToggle("👤 Invisible", "Invisible")
-makeToggle("🛡️ God Mode (Auto-Heal)", "GodMode")
+makeToggle("🛡️ God Mode", "GodMode")
 makeToggle("👻 Noclip", "Noclip")
 makeToggle("👁️ ESP", "ESP")
 makeToggle("⚡ Speed", "Speed")
 makeToggle("🕊️ Fly", "Fly")
+-- Toggle auto-farm (pakai AutoFarm table)
+makeToggle("💰 Auto-Sell", "AutoSell", true)
+makeToggle("⛏️ Auto-Prompt", "AutoPrompt", true)
+makeToggle("📜 Auto-Quest", "AutoQuest", true)
+makeToggle("🔄 Auto-Rejoin", "AutoRejoin", true)
 
 local baseY = toggleCount * 36 + 10
 
@@ -625,9 +797,11 @@ makeLabel("🔒 Max DPS", baseY + 120)
 makeBox(State.AuraMaxDPS, baseY + 144, 10, 5000, function(n) State.AuraMaxDPS = n end)
 makeLabel("🧲 Item Pull Radius", baseY + 180)
 makeBox(State.CollectRadius, baseY + 204, 1, 200, function(n) State.CollectRadius = n end)
+makeLabel("💰 Sell Interval (detik)", baseY + 240)
+makeBox(AutoFarm.SellInterval, baseY + 264, 0.5, 60, function(n) AutoFarm.SellInterval = n end)
 
 -- COIN SECTION
-local coinY = baseY + 250
+local coinY = baseY + 300
 local coinLabel = Instance.new("TextLabel")
 coinLabel.Size = UDim2.new(1, -10, 0, 24)
 coinLabel.Position = UDim2.new(0, 5, 0, coinY)
@@ -694,12 +868,12 @@ coinBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Remote status (combat + coin)
+-- Remote status (combat + coin + sell + quest)
 local RemoteStatus = Instance.new("TextLabel")
-RemoteStatus.Size = UDim2.new(1, -10, 0, 60)
+RemoteStatus.Size = UDim2.new(1, -10, 0, 80)
 RemoteStatus.Position = UDim2.new(0, 5, 0, coinY + 142)
 RemoteStatus.BackgroundTransparency = 1
-RemoteStatus.Text = "Combat Remote: mencari...\nCoin Remote: mencari..."
+RemoteStatus.Text = "..."
 RemoteStatus.TextColor3 = Color3.fromRGB(255, 200, 100)
 RemoteStatus.Font = Enum.Font.Gotham
 RemoteStatus.TextSize = 11
@@ -710,17 +884,22 @@ RemoteStatus.Parent = Scroll
 task.spawn(function()
     while task.wait(1) do
         local combatTxt = (CombatRemote and CombatRemote.Parent)
-            and ("✅ " .. CombatRemote.Name)
-            or "⚠️ ga ketemu"
+            and ("✅ " .. CombatRemote.Name) or "⚠️"
         local coinTxt = (State.CoinRemote and State.CoinRemote.Parent)
-            and ("✅ " .. State.CoinRemote.Name)
-            or "⚠️ ga ketemu"
-        RemoteStatus.Text = "Combat Remote: " .. combatTxt .. "\nCoin Remote: " .. coinTxt
+            and ("✅ " .. State.CoinRemote.Name) or "⚠️"
+        local sellTxt = (SellRemote and SellRemote.Parent)
+            and ("✅ " .. SellRemote.Name) or "⚠️"
+        local questTxt = (QuestRemote and QuestRemote.Parent)
+            and ("✅ " .. QuestRemote.Name) or "⚠️"
+        RemoteStatus.Text = "Combat: " .. combatTxt .. "\nCoin: " .. coinTxt
+            .. "\nSell: " .. sellTxt .. "\nQuest: " .. questTxt
     end
 end)
 
 task.spawn(function()
     findCoinRemote()
+    findSellRemote()
+    findQuestRemote()
 end)
 
 ToggleBtn.MouseButton1Click:Connect(function()
@@ -745,186 +924,4 @@ UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
 end)
 
-print("[DTC v3] Loaded! Klik DTC buat buka menu.")
-
--- ============ 6. AUTO-FARM SECTION ============
-local AutoFarm = {
-    AutoSell = false,
-    SellInterval = 2,          -- detik antar jual
-    AutoPickup = false,        -- udah include di ItemCollector
-    AutoPrompt = false,
-    PromptRadius = 20,
-    AutoQuest = false,
-    QuestInterval = 5,
-    AutoRejoin = false,
-    RejoinDelay = 5,           -- detik sebelum rejoin
-    LastSell = 0,
-    LastQuest = 0,
-}
-
--- Cari remote jual (Sell, Jual, Shop, Market, Trade)
-local SellRemote = nil
-local function findSellRemote()
-    if SellRemote and SellRemote.Parent then return SellRemote end
-    SellRemote = nil
-    local candidates = {
-        "Sell", "Jual", "SellAll", "SellItem", "Shop", "Market",
-        "Trade", "TradeAll", "Submit", "Deposit", "CashOut", "Convert",
-        "Refine", "Smelt", "Process", "Upgrade",
-    }
-    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-            local lower = obj.Name:lower()
-            for _, kw in ipairs(candidates) do
-                if lower:find(kw:lower()) then
-                    SellRemote = obj
-                    print("[AutoSell] Remote:", obj:GetFullName())
-                    return obj
-                end
-            end
-        end
-    end
-    return nil
-end
-
--- Cari remote quest / claim
-local QuestRemote = nil
-local function findQuestRemote()
-    if QuestRemote and QuestRemote.Parent then return QuestRemote end
-    QuestRemote = nil
-    local candidates = {
-        "Quest", "Claim", "Reward", "Daily", "Bonus", "Task",
-        "Complete", "Finish", "TurnIn", "SubmitQuest",
-    }
-    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-            local lower = obj.Name:lower()
-            for _, kw in ipairs(candidates) do
-                if lower:find(kw:lower()) then
-                    QuestRemote = obj
-                    print("[AutoQuest] Remote:", obj:GetFullName())
-                    return obj
-                end
-            end
-        end
-    end
-    return nil
-end
-
--- Cari tombol jual di GUI
-local function findSellButton()
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not playerGui then return nil end
-    local keywords = {"sell", "jual", "shop", "market", "trade", "submit"}
-    for _, gui in ipairs(playerGui:GetDescendants()) do
-        if gui:IsA("TextButton") or gui:IsA("ImageButton") then
-            local nameLower = gui.Name:lower()
-            local textLower = (gui.Text or ""):lower()
-            for _, kw in ipairs(keywords) do
-                if nameLower:find(kw) or textLower:find(kw) then
-                    return gui
-                end
-            end
-        end
-    end
-    return nil
-end
-
--- Auto Sell: coba remote dulu, kalau ga ada cari tombol GUI
-local function autoSellLoop()
-    if not AutoFarm.AutoSell then return end
-    local now = tick()
-    if now - AutoFarm.LastSell < AutoFarm.SellInterval then return end
-    AutoFarm.LastSell = now
-
-    -- Method 1: Remote
-    local remote = SellRemote or findSellRemote()
-    if remote then
-        pcall(function()
-            if remote:IsA("RemoteEvent") then
-                remote:FireServer()
-                remote:FireServer("all")
-                remote:FireServer("sell")
-            elseif remote:IsA("RemoteFunction") then
-                remote:InvokeServer()
-                remote:InvokeServer("all")
-            end
-        end)
-    end
-
-    -- Method 2: GUI button
-    local btn = findSellButton()
-    if btn then
-        pcall(function()
-            -- Fire button click via VirtualUser atau langsung
-            for _, conn in ipairs(getconnections and getconnections(btn.MouseButton1Click) or {}) do
-                if conn.Fire then pcall(conn.Fire, conn) end
-            end
-            -- Alternatif: fire signal langsung
-            pcall(function() btn.MouseButton1Click:Fire() end)
-        end)
-    end
-end
-
--- Auto Prompt: fire semua ProximityPrompt di radius
-local function autoPromptLoop()
-    if not AutoFarm.AutoPrompt then return end
-    local hrp = getHRP()
-    if not hrp then return end
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") and obj.Enabled then
-            local parent = obj.Parent
-            if parent and parent:IsA("BasePart") then
-                if (parent.Position - hrp.Position).Magnitude <= AutoFarm.PromptRadius then
-                    pcall(function() fireproximityprompt(obj) end)
-                end
-            end
-        end
-    end
-end
-
--- Auto Quest: fire remote quest
-local function autoQuestLoop()
-    if not AutoFarm.AutoQuest then return end
-    local now = tick()
-    if now - AutoFarm.LastQuest < AutoFarm.QuestInterval then return end
-    AutoFarm.LastQuest = now
-
-    local remote = QuestRemote or findQuestRemote()
-    if remote then
-        pcall(function()
-            if remote:IsA("RemoteEvent") then
-                remote:FireServer()
-                remote:FireServer("claim")
-                remote:FireServer("all")
-            elseif remote:IsA("RemoteFunction") then
-                remote:InvokeServer()
-                remote:InvokeServer("claim")
-            end
-        end)
-    end
-end
-
--- Auto Rejoin: kalau disconnect, rejoin otomatis
-local function setupAutoRejoin()
-    if not AutoFarm.AutoRejoin then return end
-    LocalPlayer.OnTeleport:Connect(function(state)
-        if state == Enum.TeleportState.Started then
-            print("[AutoRejoin] Teleport detected...")
-        end
-    end)
-    -- Monitor connection
-    task.spawn(function()
-        while task.wait(2) do
-            if AutoFarm.AutoRejoin then
-                pcall(function()
-                    -- Kalau game stuck / disconnect, rejoin
-                    if not LocalPlayer.Parent then
-                        game:GetService("TeleportService"):Teleport(game.PlaceId)
-                    end
-                end)
-            end
-        end
-    end)
-end
-setupAutoRejoin()
+print("[DTC v4] Loaded! Klik DTC buat buka menu.")
