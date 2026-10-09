@@ -1,0 +1,338 @@
+-- Universal NPC Aimbot Script
+-- Works on any Roblox game with NPCs/Bots
+-- Targets only non-player Humanoids
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- ============ SETTINGS ============
+local AIM_PART = "Head"
+local AIM_FOV = 150
+local AIM_SMOOTHNESS = 0.2
+local AIMBOT_ON = false
+local MAX_DISTANCE = 500
+
+-- ============ UNIVERSAL NPC DETECTION ============
+-- Instead of keywords, we just check:
+-- 1. Has a Humanoid
+-- 2. Is alive
+-- 3. Is NOT a real player character
+
+local function isNPC(model)
+    local hum = model:FindFirstChildWhichIsA("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+
+    -- Not a real player
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character == model then return false end
+    end
+
+    return true  -- Any alive non-player humanoid = NPC
+end
+
+local function getAimPart(model)
+    if AIM_PART == "Head" then
+        return model:FindFirstChild("Head")
+            or model:FindFirstChild("HumanoidRootPart")
+
+    elseif AIM_PART == "Body" then
+        return model:FindFirstChild("HumanoidRootPart")
+            or model:FindFirstChild("UpperTorso")
+            or model:FindFirstChild("Torso")
+
+    elseif AIM_PART == "Bottom" then
+        return model:FindFirstChild("LowerTorso")
+            or model:FindFirstChild("Left Leg")
+            or model:FindFirstChild("RightLowerLeg")
+            or model:FindFirstChild("HumanoidRootPart")
+    end
+    return nil
+end
+
+local function getCenter()
+    return Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+end
+
+local function findClosestNPC()
+    local center = getCenter()
+    local closest = nil
+    local closestDist = math.huge
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and isNPC(obj) then
+            local part = getAimPart(obj)
+            if part then
+                if root then
+                    local worldDist = (part.Position - root.Position).Magnitude
+                    if worldDist > MAX_DISTANCE then continue end
+                end
+
+                local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                if onScreen then
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                    if dist < AIM_FOV and dist < closestDist then
+                        closestDist = dist
+                        closest = part
+                    end
+                end
+            end
+        end
+    end
+
+    return closest
+end
+
+-- ============ GUI ============
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "UniversalAimbot"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = LocalPlayer.PlayerGui
+
+-- FOV Circle
+local FOVCircle = Instance.new("Frame")
+FOVCircle.Size = UDim2.new(0, AIM_FOV * 2, 0, AIM_FOV * 2)
+FOVCircle.Position = UDim2.new(0.5, -AIM_FOV, 0.5, -AIM_FOV)
+FOVCircle.BackgroundTransparency = 1
+FOVCircle.BorderSizePixel = 0
+FOVCircle.ZIndex = 5
+FOVCircle.Parent = ScreenGui
+local FOVStroke = Instance.new("UIStroke", FOVCircle)
+FOVStroke.Color = Color3.fromRGB(255, 215, 0)
+FOVStroke.Thickness = 1.5
+FOVStroke.Transparency = 0.4
+Instance.new("UICorner", FOVCircle).CornerRadius = UDim.new(1, 0)
+
+-- Icon Button
+local IconBtn = Instance.new("TextButton")
+IconBtn.Size = UDim2.new(0, 55, 0, 55)
+IconBtn.Position = UDim2.new(0, 20, 0.4, 0)
+IconBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+IconBtn.Text = "🎯"
+IconBtn.TextSize = 26
+IconBtn.BorderSizePixel = 0
+IconBtn.ZIndex = 10
+IconBtn.Parent = ScreenGui
+Instance.new("UICorner", IconBtn).CornerRadius = UDim.new(1, 0)
+
+-- Panel
+local Panel = Instance.new("Frame")
+Panel.Size = UDim2.new(0, 230, 0, 285)
+Panel.Position = UDim2.new(0, 85, 0.4, -30)
+Panel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+Panel.BorderSizePixel = 0
+Panel.Visible = false
+Panel.ZIndex = 9
+Panel.Parent = ScreenGui
+Instance.new("UICorner", Panel).CornerRadius = UDim.new(0, 12)
+
+-- Title
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 36)
+Title.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+Title.Text = "🎯 Universal Aimbot"
+Title.TextColor3 = Color3.fromRGB(255, 215, 0)
+Title.TextSize = 13
+Title.Font = Enum.Font.GothamBold
+Title.BorderSizePixel = 0
+Title.Parent = Panel
+Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 12)
+
+local function makeLabel(text, yPos)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -24, 0, 24)
+    lbl.Position = UDim2.new(0, 12, 0, yPos)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = text
+    lbl.TextColor3 = Color3.fromRGB(180, 180, 180)
+    lbl.TextSize = 13
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = Panel
+    return lbl
+end
+
+local function makeBtn(text, yPos, color)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -24, 0, 32)
+    btn.Position = UDim2.new(0, 12, 0, yPos)
+    btn.Text = text
+    btn.TextSize = 13
+    btn.Font = Enum.Font.GothamBold
+    btn.BackgroundColor3 = color or Color3.fromRGB(50, 50, 50)
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.BorderSizePixel = 0
+    btn.Parent = Panel
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    return btn
+end
+
+local ToggleBtn   = makeBtn("AIMBOT: OFF", 44, Color3.fromRGB(180, 40, 40))
+makeLabel("Aim Target:", 86)
+local HeadBtn     = makeBtn("🔴 Head",   110, Color3.fromRGB(50,50,50))
+local BodyBtn     = makeBtn("🟡 Body",   148, Color3.fromRGB(50,50,50))
+local BottomBtn   = makeBtn("🔵 Bottom", 186, Color3.fromRGB(50,50,50))
+
+-- FOV Slider label
+local FOVLabel = makeLabel("FOV: 150", 224)
+
+-- FOV Slider
+local SliderBg = Instance.new("Frame")
+SliderBg.Size = UDim2.new(1, -24, 0, 10)
+SliderBg.Position = UDim2.new(0, 12, 0, 248)
+SliderBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+SliderBg.BorderSizePixel = 0
+SliderBg.Parent = Panel
+Instance.new("UICorner", SliderBg).CornerRadius = UDim.new(1, 0)
+
+local SliderFill = Instance.new("Frame")
+SliderFill.Size = UDim2.new(0.5, 0, 1, 0)
+SliderFill.BackgroundColor3 = Color3.fromRGB(255, 215, 0)
+SliderFill.BorderSizePixel = 0
+SliderFill.Parent = SliderBg
+Instance.new("UICorner", SliderFill).CornerRadius = UDim.new(1, 0)
+
+local SliderBtn = Instance.new("TextButton")
+SliderBtn.Size = UDim2.new(0, 22, 0, 22)
+SliderBtn.AnchorPoint = Vector2.new(0.5, 0.5)
+SliderBtn.Position = UDim2.new(0.5, 0, 0.5, 0)
+SliderBtn.BackgroundColor3 = Color3.new(1,1,1)
+SliderBtn.Text = ""
+SliderBtn.BorderSizePixel = 0
+SliderBtn.ZIndex = 11
+SliderBtn.Parent = SliderBg
+Instance.new("UICorner", SliderBtn).CornerRadius = UDim.new(1, 0)
+
+local StatusLabel = makeLabel("Status: Off ⏸", 264)
+StatusLabel.TextColor3 = Color3.fromRGB(220, 100, 100)
+
+local CloseBtn = makeBtn("Close", 264, Color3.fromRGB(40,40,40))
+CloseBtn.Position = UDim2.new(0, 12, 0, 248)
+CloseBtn.Size = UDim2.new(1, -24, 0, 28)
+CloseBtn.Position = UDim2.new(0, 12, 1, -38)
+
+-- ============ BUTTON LOGIC ============
+
+local function updateAimButtons()
+    HeadBtn.BackgroundColor3   = AIM_PART == "Head"   and Color3.fromRGB(180,50,50)  or Color3.fromRGB(50,50,50)
+    BodyBtn.BackgroundColor3   = AIM_PART == "Body"   and Color3.fromRGB(160,140,20) or Color3.fromRGB(50,50,50)
+    BottomBtn.BackgroundColor3 = AIM_PART == "Bottom" and Color3.fromRGB(30,80,180)  or Color3.fromRGB(50,50,50)
+end
+updateAimButtons()
+
+IconBtn.MouseButton1Click:Connect(function()
+    Panel.Visible = not Panel.Visible
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    Panel.Visible = false
+end)
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    AIMBOT_ON = not AIMBOT_ON
+    if AIMBOT_ON then
+        ToggleBtn.Text = "AIMBOT: ON"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
+        StatusLabel.Text = "Status: Active ✅"
+        StatusLabel.TextColor3 = Color3.fromRGB(100, 220, 100)
+        FOVStroke.Color = Color3.fromRGB(0, 255, 100)
+    else
+        ToggleBtn.Text = "AIMBOT: OFF"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        StatusLabel.Text = "Status: Off ⏸"
+        StatusLabel.TextColor3 = Color3.fromRGB(220, 100, 100)
+        FOVStroke.Color = Color3.fromRGB(255, 215, 0)
+    end
+end)
+
+HeadBtn.MouseButton1Click:Connect(function()
+    AIM_PART = "Head" updateAimButtons()
+end)
+BodyBtn.MouseButton1Click:Connect(function()
+    AIM_PART = "Body" updateAimButtons()
+end)
+BottomBtn.MouseButton1Click:Connect(function()
+    AIM_PART = "Bottom" updateAimButtons()
+end)
+
+-- FOV Slider logic
+local sliding = false
+SliderBtn.MouseButton1Down:Connect(function() sliding = true end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        sliding = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if not sliding then return end
+    if input.UserInputType == Enum.UserInputType.MouseMovement
+    or input.UserInputType == Enum.UserInputType.Touch then
+        local absPos = SliderBg.AbsolutePosition
+        local absSize = SliderBg.AbsoluteSize
+        local pct = math.clamp((input.Position.X - absPos.X) / absSize.X, 0, 1)
+        AIM_FOV = math.floor(pct * 300)
+        if AIM_FOV < 20 then AIM_FOV = 20 end
+        SliderFill.Size = UDim2.new(pct, 0, 1, 0)
+        SliderBtn.Position = UDim2.new(pct, 0, 0.5, 0)
+        FOVLabel.Text = "FOV: " .. AIM_FOV
+        -- Update circle size
+        FOVCircle.Size = UDim2.new(0, AIM_FOV * 2, 0, AIM_FOV * 2)
+        FOVCircle.Position = UDim2.new(0.5, -AIM_FOV, 0.5, -AIM_FOV)
+    end
+end)
+
+-- Draggable icon
+local dragging, dragStart, startPos = false, nil, nil
+
+IconBtn.MouseButton1Down:Connect(function(x, y)
+    dragging = true
+    dragStart = Vector2.new(x, y)
+    startPos = IconBtn.Position
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if not dragging then return end
+    if input.UserInputType == Enum.UserInputType.MouseMovement
+    or input.UserInputType == Enum.UserInputType.Touch then
+        local delta = input.Position - Vector3.new(dragStart.X, dragStart.Y, 0)
+        IconBtn.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+        Panel.Position = UDim2.new(
+            IconBtn.Position.X.Scale, IconBtn.Position.X.Offset + 65,
+            IconBtn.Position.Y.Scale, IconBtn.Position.Y.Offset - 30
+        )
+    end
+end)
+
+-- ============ AIMBOT LOOP ============
+
+RunService.RenderStepped:Connect(function()
+    if not AIMBOT_ON then return end
+    local target = findClosestNPC()
+    if not target then return end
+
+    local currentCF = Camera.CFrame
+    local direction = (target.Position - currentCF.Position).Unit
+    local targetCF = CFrame.lookAt(currentCF.Position, currentCF.Position + direction)
+    Camera.CFrame = currentCF:Lerp(targetCF, AIM_SMOOTHNESS)
+end)
+
+print("[Universal Aimbot] Loaded! Tap 🎯 to open.")
